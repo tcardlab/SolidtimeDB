@@ -1,0 +1,18 @@
+{
+  "name": "solidtimedb",
+  "module": "index.ts",
+  "type": "module",
+  "scripts": {
+    "start": "cd client && vite",
+    "gen:init": "spacetime generate --lang typescript --out-dir ./module_bindings --project-path server",
+    "gen:sfe": "bun run scripts/gen_sfe.ts module_bindings",
+    "gen": "bun run gen:init && bun run gen:sfe"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5.0.0"
+  },
+  "workspaces": ["client"]
+}
