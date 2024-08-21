@@ -1,12 +1,26 @@
 {
   "name": "solidtimedb",
-  "module": "index.ts",
   "type": "module",
   "scripts": {
-    "start": "cd client && vite",
-    "gen:init": "spacetime generate --lang typescript --out-dir ./module_bindings --project-path server",
-    "gen:sfe": "bun run scripts/gen_sfe.ts module_bindings",
-    "gen": "bun run gen:init && bun run gen:sfe"
+    "install": "bun scripts/install.ts",
+    "start:FE": "cd client && vite",
+    "start:BE": "bun scripts/cli.ts start",
+    "start": "bun scripts/start.ts",
+    "start:Full": "bun scripts/start.ts",
+    "start:Fast": "bun scripts/start.ts fast",
+    "start:C": "bun scripts/start.ts clear",
+    "deploy": "bun scripts/start.ts server",
+    "gen": "bun scripts/cli.ts gen",
+    "logs": "bun scripts/cli.ts logs",
+    "sql": "bun scripts/cli.ts sql",
+    "call": "bun scripts/cli.ts call",
+    "describe": "bun scripts/cli.ts describe",
+    "publish": "bun scripts/cli.ts publish",
+    "publish:C": "bun scripts/cli.ts publish -c",
+    "publish:Dev": "bun scripts/cli.ts pubTo dev",
+    "publish:Prod": "bun scripts/cli.ts pubTo prod",
+    "clear": "bun scripts/cli.ts clear",
+    "set-version": "bun scripts/version.ts"
   },
   "devDependencies": {
     "@types/bun": "latest"
@@ -14,5 +28,10 @@
   "peerDependencies": {
     "typescript": "^5.0.0"
   },
-  "workspaces": ["client"]
+  "workspaces": [
+    "client"
+  ],
+  "dependencies": {
+    "tar": "^7.4.3"
+  }
 }

@@ -51,27 +51,29 @@ export class User extends DatabaseTable
 		return new this(__identity, __name, __online);
 	}
 
-	public static filterByIdentity(value: Identity): User | null
+	public static *filterByIdentity(value: Identity): IterableIterator<User>
 	{
-		for(let instance of this.db.getTable("User").getInstances())
+		for (let instance of this.db.getTable("User").getInstances())
 		{
 			if (instance.identity.isEqual(value)) {
-				return instance;
+				yield instance;
 			}
 		}
-		return null;
 	}
 
-	public static filterByOnline(value: boolean): User[]
+	public static findByIdentity(value: Identity): User | undefined
 	{
-		let result: User[] = [];
-		for(let instance of this.db.getTable("User").getInstances())
+		return this.filterByIdentity(value).next().value;
+	}
+
+	public static *filterByOnline(value: boolean): IterableIterator<User>
+	{
+		for (let instance of this.db.getTable("User").getInstances())
 		{
 			if (instance.online === value) {
-				result.push(instance);
+				yield instance;
 			}
 		}
-		return result;
 	}
 
 

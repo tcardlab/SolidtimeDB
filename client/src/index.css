@@ -11,3 +11,15 @@ code {
   font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
     monospace;
 }
+
+#app {
+  text-align: center;
+}
+
+h1 {
+  margin: 10px 0px
+}
+
+p {
+  margin: 4px 0px
+}

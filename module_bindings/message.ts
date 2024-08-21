@@ -45,40 +45,34 @@ export class Message extends DatabaseTable
 		return new this(__sender, __sent, __text);
 	}
 
-	public static filterBySender(value: Identity): Message[]
+	public static *filterBySender(value: Identity): IterableIterator<Message>
 	{
-		let result: Message[] = [];
-		for(let instance of this.db.getTable("Message").getInstances())
+		for (let instance of this.db.getTable("Message").getInstances())
 		{
 			if (instance.sender.isEqual(value)) {
-				result.push(instance);
+				yield instance;
 			}
 		}
-		return result;
 	}
 
-	public static filterBySent(value: BigInt): Message[]
+	public static *filterBySent(value: BigInt): IterableIterator<Message>
 	{
-		let result: Message[] = [];
-		for(let instance of this.db.getTable("Message").getInstances())
+		for (let instance of this.db.getTable("Message").getInstances())
 		{
 			if (instance.sent === value) {
-				result.push(instance);
+				yield instance;
 			}
 		}
-		return result;
 	}
 
-	public static filterByText(value: string): Message[]
+	public static *filterByText(value: string): IterableIterator<Message>
 	{
-		let result: Message[] = [];
-		for(let instance of this.db.getTable("Message").getInstances())
+		for (let instance of this.db.getTable("Message").getInstances())
 		{
 			if (instance.text === value) {
-				result.push(instance);
+				yield instance;
 			}
 		}
-		return result;
 	}
 
 
