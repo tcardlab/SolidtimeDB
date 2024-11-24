@@ -30,6 +30,7 @@ import { createComputed, onCleanup, createSignal, batch, getOwner, runWithOwner 
 import { createStore, reconcile } from "solid-js/store";
 import type { Accessor } from "solid-js";
 import { ReactiveMap } from "@solid-primitives/map";
+import { ReactiveSet } from "@solid-primitives/set";
 
 /***   EventMap Typings   ***/
 type InsertHandler <T> = (key: string, item: T) => void;
@@ -51,7 +52,7 @@ export type EventMap <T> = () => {
 };
 
 /***   Main   ***/
-export function live_filter<T>(
+export function live_filter<T, Key=string>(
   source_store: () => Map<string, T> | [string, T][], // () => Object.entries({})?
   filter: Accessor<undefined | ((item: T) => boolean)>,
   events: EventMap<T>,
@@ -213,5 +214,27 @@ export let object_store = () => {
     },
     filter_delete: (old_key: string) => setStore(old_key, undefined),
     filter_clear: () => setStore(reconcile({})),
+  };
+};
+
+// might not work cuz the filter assumes string based key...
+export let set_store = <T>() => {
+  let store = new ReactiveSet<T>();
+  return {
+    filter_store: () => store,
+    filter_set: (key: T, v: undefined) => store.add(key),
+    filter_update: (old_key: T, key: T, mutable: boolean) => {
+      // tricky... 
+      // if they update mutates the object<T>, there's no need to do anything.
+      // if not, the we must still delete and replace.
+      if (mutable) return
+      batch(() => {
+        // Delete before set in case the same key is used.
+        store.delete(old_key);
+        store.add(key);
+      });
+    },
+    filter_delete: (key: T) => store.delete(key),
+    filter_clear: () => store.clear(),
   };
 };

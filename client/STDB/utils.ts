@@ -1,5 +1,5 @@
 import { ReactiveMap } from "@solid-primitives/map";
-import { createMemo, onCleanup, Accessor, Setter, createSignal, untrack, createComputed, on, runWithOwner, getOwner } from 'solid-js'
+import { createMemo, onCleanup, Accessor, Setter, createSignal, untrack, createComputed, on, runWithOwner, getOwner, createEffect } from 'solid-js'
 import { SpacetimeDBClient, Identity, ReducerEvent, DatabaseTable, __SPACETIMEDB__ } from "@clockworklabs/spacetimedb-sdk";
 import { live_filter } from "./live_filter"
 import { createLazyMemo } from "@solid-primitives/memo";
@@ -27,11 +27,13 @@ export function clearPriors(project_name:string, clear_all_storage=false) {
     } else {
       localStorage.removeItem('STDB_NAME')
 
-      localStorage.removeItem('auth_token')
-      localStorage.removeItem('safeConnect_auth_token')
+      // not really necessary as STDB_NAME has been appended
+      // for project specific keys here
+      //localStorage.removeItem('safeConnect_identity')
+      //localStorage.removeItem('safeConnect_auth_token')
 
       localStorage.removeItem('identity')
-      localStorage.removeItem('safeConnect_identity')
+      localStorage.removeItem('auth_token')
     }
   }
 
@@ -44,15 +46,18 @@ export function clearPriors(project_name:string, clear_all_storage=false) {
   can be used together (though a tad redundant)
   or used separately, both will ensure a proper connection
 */
+const AUTH_TOKEN_KEY = `${__STDB_ENV__.STDB_MODULE}_safeConnect_auth_token`
 export async function safeConnect(client:SpacetimeDBClient, /* address */) {
   // might wish to clean this up a bit later
   let address = location.origin //__STDB_ENV__.STDB_ADDRESS
 
   if (client.live) return console.log('Client already connected.')
+
+  // Pre-catch bad token
   try {
     let res = await fetch(`${address}/identity/websocket_token`, {
       "headers": {
-        "authorization": `Basic ${btoa('token:'+localStorage.getItem('safeConnect_auth_token'))}`,
+        "authorization": `Basic ${btoa('token:'+localStorage.getItem(AUTH_TOKEN_KEY))}`,
       },
       "method": "POST"
     });
@@ -62,10 +67,15 @@ export async function safeConnect(client:SpacetimeDBClient, /* address */) {
   } catch(err) {
     // console.log(err as Error)
   }
-  localStorage.removeItem('safeConnect_auth_token')
+
+  localStorage.removeItem(AUTH_TOKEN_KEY)
   client.connect() // connect anonymously
 }
 
+// ATM, this should be run top level so HMR does full reload
+// otherwise you may get mem-leak between saves on:
+//   client.emitter.on('connected',()=>{})
+// It also lacks an owner, so reactivity wont work either.
 export function onSafeConnect(
   client: SpacetimeDBClient, 
   onSuccess:(token:string, identity:Identity)=>void, 
@@ -94,9 +104,20 @@ export function hmrConnect(
   {client, once, perLoad, onError}: 
   {client: SpacetimeDBClient, once?: ConnectCB, perLoad?: ConnectCB, onError?:(err:Error)=>void}
 ): void {
+  // We use an explicit owner so people can use signals within the event callbacks
   let owner = getOwner()
+
+  let initToken = client?.['runtime']?.auth_token
   let connectCB = (token:string, identity:Identity, /* address:Address */) => {
+    const urlParams = new URLSearchParams(client?.['ws']?.url);
+    const isTokenValid = urlParams.get('token')
+
     runWithOwner(owner, ()=>{
+      // If init token set, but determined incorrect on connect
+      if(initToken && !isTokenValid) {
+        return onError?.(new Error('Invalid Token: ' +client.token))
+      }
+
       // client.live is not reliable atm... is true even when ws fails
       if(!client.live) onError?.(new Error('client not connected'))
         try{
@@ -112,7 +133,7 @@ export function hmrConnect(
         } catch(err) {
           onError?.(err as Error)
         }
-    }) 
+    })
   }
 
   client.onConnect(connectCB)
@@ -122,9 +143,65 @@ export function hmrConnect(
   // useful for routing post-connect
   if (import.meta.hot && import.meta.hot.data['hmrConnect_once']) {
     let {hmrConnect_token:token, hmrConnect_identity:identity} = import.meta.hot!.data
-    perLoad && perLoad({token, identity})
+    try{
+      perLoad && perLoad({token, identity})
+    } catch(err) {
+      onError?.(err as Error)
+    }
   }
 }
+
+async function withExponentialBackoff<T>(
+  operation: () => Promise<T>,
+  isSuccess: (result: T) => boolean|Promise<boolean>,
+  maxRetries: number = 5,
+  initialDelay: number = 1000
+): Promise<T> {
+  for (let retries = 0; retries <= maxRetries; retries++) {
+    try {
+      const result = await operation();
+      if (await isSuccess(result)) {
+        return result;
+      }
+      throw new Error('Operation did not succeed');
+    } catch (error) {
+      if (retries === maxRetries) {
+        console.error('Max retries reached. Throwing error.');
+        throw error;
+      }
+
+      let delay = initialDelay * Math.pow(2, retries);
+      delay = delay/2 + Math.random()*delay/2 // Jitter
+      console.log(`Attempt ${retries + 1} failed. Retrying in ${(delay/1000)|0} seconds...`);
+      
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+  }
+
+  throw new Error('Unexpected end of function');
+}
+
+export function handleDisconnect(client:SpacetimeDBClient) { 
+  client.on('disconnected', async () => {
+    client.live = false // fix for STDB bug
+    console.log('disconnected');
+
+    try {
+      await withExponentialBackoff(
+        () => client.connect(),
+        () => client.live 
+        // idk if live is set b4 connect resolves...
+        // onConnect is inconvenient for this purpose,
+        // but might be necessary.
+      )
+      console.log('Reconnected successfully!')
+    } catch (error) {
+      console.error('Failed to fetch data:', error)
+    }
+  })
+}
+
+
 
 function hmrSafeTable(table:Table) {
   let ogInsert = table.onInsert
@@ -223,132 +300,6 @@ export function STDB_Event_Debugger() {
 }
 
 
-// This evolved into live_filter
-function old_filter
-  <T extends abstract new (...args: any) => any>
-  (table: DatabaseTable, filter: (row:InstanceType<T>)=>boolean):
-  (()=>InstanceType<T>[])
-{
-  const filtered = new ReactiveMap<string, InstanceType<T>>()
-  const filtered_arr = createMemo( () => [...filtered.values()] )
-  
-  /*
-    RowPK Problem: I am essentially creating my own table here.
-    unfortunately, STDB  emit data doesn't natively provide rowPK.
-    I have tweaked the emit data to include it so i can track rows externally
-    (I guess i could stringify the row and use that as the key, idk...)
-  */
-
-  let insertCB = (row:any) => {
-    if( filter(row) ) {
-      // valid row, add to filter set
-      filtered.set(row.rowPk, row)
-    }
-  }
-
-  let updateCB = (oldRow:any, row:any) => {
-    if (filter(row)) {
-      // still valid, but update row pk
-      filtered.set(row.rowPk, row)
-      filtered.delete(oldRow.rowPk)
-      return 
-    } else {
-      // no longer valid, remove
-      filtered.delete(oldRow.rowPk)
-    }
-  }
-
-  let deleteCB = (oldRow:any) => {
-    if (oldRow in filtered) {
-      // deleted, remove
-      filtered.delete(oldRow.rowPk)
-    }
-  }
-
-  // TS BS
-  let table_base = (table as typeof DatabaseTable);
-  table_base.onInsert(insertCB);
-  table_base.onUpdate(updateCB);
-  table_base.onDelete(deleteCB);
-
-  onCleanup(()=>{
-    table_base.removeOnInsert(insertCB)
-    table_base.removeOnUpdate(updateCB)
-    table_base.removeOnDelete(deleteCB)
-  })
-
-  return filtered_arr
-}
-
-export function memo<T>(watch: () => any, cb: () => T) {
-  let last_val: T;
-
-  let is_dirty = true;
-  createComputed(on(watch, () => {
-    console.log("made dirty");
-    is_dirty = true;
-  }));
-
-  return () => {
-    if (is_dirty) {
-      last_val = untrack(cb);
-      is_dirty = false;
-    }
-    return last_val;
-  };
-}
-
-
-interface MemoOptions {
-  onDemand?: boolean
-  trackable?: boolean
-}
-function memo2<T>(cb: () => any, options:MemoOptions={}) {
-  /*
-    The goal of this memo is to minimize recalculations, 
-    yet still supply a synchronized value on demand.
-    - The only way to minimize recalculation on demand in this scenario 
-      is to track whether dependencies go dirty (recalc required).
-    - Avoiding recalc on reactive updates means the
-      subscriptions will be cleared and the effect disposed.
-      This actually eliminates unnecessary side-effects entirely,
-      but requires the effect be re-initialized each recalculation. 
-  */
-  options = { onDemand: false, trackable: true,  ...options}
-
-  let [last_val, set_last] = createSignal<T>();
-  let [is_dirty, set_dirty] = createSignal<boolean>(true);
-
-  let owner = getOwner();
-  let effect = () => {
-    runWithOwner(owner, () => {
-      createComputed(() => {
-        if (untrack(() => is_dirty())) {
-          console.log("recalc");
-          // run, memo, and mark clean
-          set_last(cb());
-          set_dirty(false);
-        } else {
-          console.log("made dirty");
-          // Dispose effect:
-          // no need to listen to subsequent updates once known to be dirty
-          set_dirty(true);
-        }
-      });
-    });
-  };
-  effect();
-
-  return () => {
-    // if dirty, recalc on demand
-    // init new comp. to listen for dirty toggle
-    if (options.onDemand ? untrack(() => is_dirty()) : is_dirty()) effect(); 
-    return options.trackable ? last_val()! : untrack(() => last_val())!;  // return clean memo
-  };
-}
-
-
-
 interface StdbFilterOptions {
   memo?: boolean,
   name?: string,
@@ -381,20 +332,8 @@ export function stdb_filter
     // not great for large, volatile data.
 
     // Lazy memo
-    //let memo_getter = createLazyMemo(() => new Map(raw_table.instances as ReactiveMap<string, Row>));
-    //let memo_getter = createLazyMemo(() => [...(raw_table.instances as ReactiveMap<string, Row>).entries()]);
     let memo_getter = createLazyMemo(() => new Map(raw_table.instances as ReactiveMap<string, Row>));
     deref_source = ()=>untrack(memo_getter)
-    
-    //let memo_getter = memo(()=>raw_table.instances.size, ()=>new Map(raw_table.instances as ReactiveMap<string, Row>))
-    //deref_source = ()=>untrack(memo_getter)
-
-
-    /* let memo_getter = memo2<ReactiveMap<string, Row>>(
-      ()=>new Map(raw_table.instances as ReactiveMap<string, Row>), 
-      {trackable:false, onDemand:true}
-    )
-    deref_source = memo_getter */
   } else {
     // if instances have not updated, prevents recalculation at the cost of memory
     // must untrack as not to trigger refilter on every insert
@@ -471,10 +410,14 @@ export function get_map<T extends abstract new (...args: any) => DatabaseTable>(
 type TableAccessor<T> = Accessor<Map<string, T>> & { all:()=>T[] }
 export function STDB_Table
   <T extends abstract new (...args: any) => any>
-  (table: T, init_filter?: undefined | ((item: InstanceType<T>)=>boolean)) 
+  (
+    table: T,
+    init_filter?: undefined | ((item: InstanceType<T>)=>boolean),
+    options: StdbFilterOptions = {memo: false}
+  )
 {
   let [filter_signal, set_filter] = createSignal(init_filter)
-  let filted_data = stdb_filter<T>(table, filter_signal)
+  let filted_data = stdb_filter<T>(table, filter_signal, options)
 
   // NOTE: hmm seems we may have to make instances a reactive map to keep dom updated
   // this means we may need to untrack source in live_filter to prevent full refilters on inserts etc. 
@@ -496,6 +439,82 @@ export function STDB_Table
 }
 
 
+/*
+It probably doesn't make much difference whether we filter the table as row ops are processed
+vs after the table is populated, its basically the same number of function calls. 
+(idk if the event handling adds overhead when listening to each op...)
+
+However, what is potentially significant is the down stream effects being triggered for each update
+when we can perhaps ignore all that till the whole table is populated.
+(resubscribing may bring this issue up again...)
+
+initialStateSync is on the client rather than the particular table, which is inconvenient for us.
+Its also debatable whether this should be handled within the function or externally:
+  let msgs, set_filter;
+  let client = get_client()
+  client.on('initialStateSync', ()=>{
+    ([msgs, set_filter] = STDB_Table(Message))
+  })
+
+idk... might be over kill
+*/
+//              WIP
+/*
+type StdbTableOptions = StdbFilterOptions & {client: SpacetimeDBClient, skipInit: boolean}
+type TableAccessor<T> = Accessor<Map<string, T>> & { all:()=>T[] }
+export function STDB_Table
+  <T extends abstract new (...args: any) => any>
+  (
+    table: T,
+    init_filter?: undefined | ((item: InstanceType<T>)=>boolean),
+    options: StdbTableOptions = {memo: false, client: __SPACETIMEDB__.spacetimeDBClient!, skipInit:true}
+  )
+{
+
+  let [filter_signal, set_filter] = createSignal(init_filter) //createSignal(undefined)
+  let filted_data = stdb_filter<T>(table, filter_signal, options)
+  let [source, set_source] = createSignal(new Map())
+
+  let initCB = ()=>{
+    //set_filter(init_filter)
+    set_source(get_map(table))
+  }
+  if (options.client && options.skipInit) {
+    options?.client.on('initialStateSync', initCB)
+    onCleanup(()=>options?.client.off('initialStateSync', initCB))
+    // might need set_source(new Map()) on subscription update too
+  } else {
+    initCB()
+  }
+  
+  let val_map = createMemo(on(filter_signal, () => {
+    // If a filter exists, return filtered map, otherwise return source.
+    // this keeps memory to a minimum preventing filter from duping the source.
+    return filter_signal() ? filted_data() : source()
+  })) as TableAccessor<InstanceType<T>>
+
+  val_map.all = createLazyMemo(()=>{
+    return Array.from(val_map().values())
+  })
+
+  return [val_map, set_filter] as [
+    TableAccessor<InstanceType<T>>, 
+    Setter<((item: InstanceType<T>) => boolean) | undefined>
+  ]
+}
+*/
+
+type SafeRow <T> = Accessor<T|null>
+export function row_ref<T extends DatabaseTable>(row_proxy: T){
+  let [row, set_row] = createSignal<T|null>(row_proxy)
+
+  createEffect(on(()=>(row_proxy as any)?.rowPk, v=>{
+    if (v===undefined) set_row(null)
+  }))
+
+  return row as SafeRow<T>
+}
+
 
 export type Red = ReducerEvent | undefined
 export type I<T extends new (...args: any[]) =>any> = InstanceType<T>
@@ -508,7 +527,8 @@ export type CleanUp = ()=>void
 export type DestructCB<T extends new (...args: any[]) =>any, V extends IN<T>|null, OV extends IN<T>|null> = (params: {val:V, prev:OV, red:Red})=>void
 
 export function D
-  <T extends new (...args: any) => any, V extends IN<T>, VO extends IN<T>>(cb:DestructCB<T, V, VO>)
+  <T extends new (...args: any) => any, V extends IN<T>, VO extends IN<T>>
+  (cb:DestructCB<T, V, VO>)
 : CB<T, V, VO>{;
   return (val, prev, red)=>cb({val, prev, red})
 }
@@ -526,31 +546,12 @@ export function onInsert
   return unsub
 }
 
-/* export function onInsertD 
-  <T extends new (...args: any) => any>
-  (table: T, cb:DestructCB<T, I<T>, null>): CleanUp
-{
-  let normCB = (val:I<T>, red:Red) => { cb({val, prev:null , red}) }
-
-  (table as any as Table).onInsert(normCB)
-  let unsub = () => (table as any as Table).removeOnInsert(normCB)
-  onCleanup(unsub)
-
-  return unsub
-} */
-/* export function onInsertD 
-  <T extends new (...args: any) => any>
-  (table: T, cb:DestructCB<T, I<T>, null>): CleanUp
-{
-  return onInsert(table, (val, prev, red)=>cb({val, prev, red}))
-} */
 export function onInsertD 
   <T extends new (...args: any) => any>
   (table: T, cb:DestructCB<T, I<T>, null>): CleanUp
 {
   return onInsert(table, D(cb))
 }
-
 
 export function onUpdate
   <T extends new (...args: any) => any>
@@ -686,7 +687,8 @@ export function onChange2
 */
 export function oneOffFind
   <T extends new (...args: any) => any>
-  (table: T, filter: (row:I<T>)=>boolean, options={check_cache:true, check_update:true, check_insert:true}) 
+  (table: T, filter: (row:I<T>)=>boolean, options={check_cache:true, check_update:true, check_insert:true}):
+  SafeRow<I<T>>
 {
   // searches cache and incoming messages
 
@@ -697,8 +699,10 @@ export function oneOffFind
   //(table as any as Table & {all: any})
 
   let [result, set_result] = createSignal<Row | null>(null)
-  createComputed(on(result, ()=>{
-    console.log('WTF', result())
+
+  // from row_ref() as its simpler than using that
+  createEffect(on(()=>(result() as any)?.rowPk, v=>{
+    if (v===undefined) set_result(null)
   }))
 
   if (options.check_cache) {
@@ -738,15 +742,6 @@ export function oneOffFind
   return result
 }
 
-
-/* export async function oneOffQuery() {
-  // searches database via sql (since data might not be subscribed to)
-  // JUST USE KYSELY
-
-  // could use a second client to grab parsed data off init ws query
-  // gotta check docs oon how to unsub between queries
-  // this is prob a bad method tho as it not what it was built for
-} */
 
 
 export function createDeferred() {

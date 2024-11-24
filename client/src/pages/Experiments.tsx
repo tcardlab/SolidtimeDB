@@ -67,8 +67,9 @@ const Experiments: Component = () => {
   }
 
   // Derived State
-  let [ msgs ] = STDB_Table(Message)
+  let [ msgs ] = STDB_Table(Message) //get_map(Message)
   let msgEl: HTMLDivElement;
+
 
   // Template
   return (

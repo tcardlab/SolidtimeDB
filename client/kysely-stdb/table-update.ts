@@ -171,7 +171,7 @@ export const simple_table_update = (schema: SchemaExpanded, database: DB, EE: Ev
 
 /***    PRODUCTION TABLE UPDATE    ***\
   Performs a preprocessing step to isolate inserts as well as 
-  Find updates by associating deletes and insets through pk value.
+  Find updates by associating deletes and inserts through pk value.
   Then, it iterates over the operations types individually.
   This is a robust implementation.
   Notably, it also uses the full row as the key, even when for pk tables.

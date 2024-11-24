@@ -1,10 +1,10 @@
 // pkg imports
 import { SpacetimeDBClient, Identity } from "@clockworklabs/spacetimedb-sdk";
-import { clearPriors, onSafeConnect, STDB_Event_Debugger } from './utils'
+import { clearPriors, onSafeConnect, STDB_Event_Debugger, handleDisconnect } from './utils'
 import { reactive_cache } from './solidDB'
 
 // root level import
-import { register } from '@/module_bindings'
+import { register, registerArr } from '@/module_bindings'
 import { Accessor, createRoot, createSignal, onCleanup } from "solid-js";
 await register()
 
@@ -14,18 +14,23 @@ let client: SpacetimeDBClient;
 // then i can detect connection update by proxy
 let global_token: string | undefined;
 let global_identity: Identity | undefined;
+const AUTH_TOKEN_KEY = `${__STDB_ENV__.STDB_MODULE}_safeConnect_auth_token`
+const IDENTITY_KEY = `${__STDB_ENV__.STDB_MODULE}_safeConnect_identity`
+
 
 STDB_Event_Debugger()
 
 export function init_stdb() {
   // Catch Project Change: if project name DNE or different
   clearPriors(__STDB_ENV__.STDB_MODULE)
+  // not strictly necessary anymore, tho people may wish to adapt it.
 
-  // Cant use async atm
-  // await register()
+
+  // TO DO:
+  // registerArr(Object.values(Bindings))
   
   // Not sure how to specify multi-client...
-  global_token = localStorage.getItem('safeConnect_auth_token') || undefined;
+  global_token = localStorage.getItem(AUTH_TOKEN_KEY) || undefined;
   client = new SpacetimeDBClient(__STDB_ENV__.STDB_WS, __STDB_ENV__.STDB_MODULE, global_token);
   
   reactive_cache(client.db)
@@ -37,16 +42,20 @@ export function init_stdb() {
     // success
     if (!global_token) global_token = token
     global_identity = identity
-    localStorage.setItem('safeConnect_auth_token', token); // set good token
-    localStorage.setItem('safeConnect_identity', identity.toHexString()); // set good token
+    localStorage.setItem(AUTH_TOKEN_KEY, token); // set good token
+    localStorage.setItem(IDENTITY_KEY, identity.toHexString()); // set good token
   }, ()=>{
     // Set invalid auth token to test:
-    localStorage.removeItem('safeConnect_auth_token') // remove bad token
-    localStorage.removeItem('safeConnect_identity')
+    localStorage.removeItem(AUTH_TOKEN_KEY) // remove bad token
+    localStorage.removeItem(IDENTITY_KEY)
     global_token=undefined
-    //client.connect() //setTimeout(client.connect, 1e3)
-    location.reload()  // have to refresh to reconnect to WS...
+
+    // wait does this need to disconnect first?
+    client.live = false // STDB bug doesn't do this automatically
+    client.connect()
   })
+
+  handleDisconnect(client)
 
   return useClientVals(client)
 }

@@ -24,10 +24,6 @@ if (import.meta.env.DEV && !(root instanceof HTMLElement)) {
 render(() => {
   let clientVals = init_stdb()     // reactive cache must exist under root
   hmrSafeClient() // utilizes solid js onCleanup
-  //^only does CLient events, not tables
-  // maybe i should have it handle both?
-  // yea, cuz reducers have listeners too
-  // just iterate over all registered things
 
   return <App/>
 

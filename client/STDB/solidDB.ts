@@ -43,30 +43,8 @@ export function reactive_cache(clientDB=__SPACETIMEDB__.clientDB as ClientDB & {
     //solidify_rows(table)
     solidify_table(table)
     //solidify_table_V2(table)
-
-    //hmrSafeTable(table) 
-    // might move this to hmrSafeClient
   }
 }
-
-/* function hmrSafeTable(table:Table) {
-  let ogInsert = table.onInsert
-  let ogUpdate = table.onUpdate
-  let ogDelete = table.onDelete
-
-  table.onInsert = (cb)=>{
-    ogInsert(cb)
-    onCleanup(()=>table.removeOnInsert(cb))
-  };
-  table.onUpdate = (cb)=>{
-    ogUpdate(cb)
-    onCleanup(()=>table.removeOnUpdate(cb))
-  };
-  table.onDelete = (cb)=>{
-    ogDelete(cb)
-    onCleanup(()=>table.removeOnDelete(cb))
-  };
-} */
 
 
 let insertCB = (table:Table) => (dbOp:DBOp, reducerEvent:Red)=>{
@@ -98,8 +76,12 @@ let updateCB = (table:Table) => (dbOp:DBOp, dbOpOld:DBOp, reducerEvent:Red)=>{
 }
 
 let deleteCB = (table:Table) => (dbOp:DBOp, reducerEvent:Red)=>{
-  let row = table.instances.get(dbOp.rowPk)
-  table.instances.delete(dbOp.rowPk)
+  let row = table.instances.get(dbOp.rowPk)!
+  table.instances.delete(dbOp.rowPk);
+
+  // This is signal that the row has been deleted (ie row_ref())
+  (row as any).rowPk = undefined
+  // could use anther property like __deleted or __live
 
   table.emitter.emit('delete', row, reducerEvent)
 }
@@ -266,9 +248,15 @@ let updateCB_V2 = (table:Table) => (dbOp:DBOp, dbOpOld:DBOp, reducerEvent:Red)=>
 
 let deleteCB_V2 = (table:Table) => (dbOp:DBOp, reducerEvent:Red)=>{
   let row = table.instances.get(dbOp.rowPk)
-  table.instances.delete(dbOp.rowPk)
+  table.instances.delete(dbOp.rowPk);
 
-  table.emitter.emit('delete', {...row, __setter: null}, reducerEvent)
+  // This is signal that the row has been deleted (ie row_ref())
+  //(row as Row).__setter()('rowPK', undefined)
+  //table.emitter.emit('delete', {...row, __setter: null}, reducerEvent)
+
+
+  (row as Omit<Row, '__setter'>).__setter()({'rowPK': undefined, __setter: null})
+  table.emitter.emit('delete', row, reducerEvent)
 }
 
 

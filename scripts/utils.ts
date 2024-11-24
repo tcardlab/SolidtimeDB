@@ -8,7 +8,11 @@ import { appendFileSync, rmSync, existsSync } from "node:fs";
 // Resolve EXE Path
 import path from 'node:path';
 let { STDB_EXE_PATH } = process.env
-let STDB = STDB_EXE_PATH ? path.join(STDB_EXE_PATH,'spacetime') : 'spacetime'
+let STDB = STDB_EXE_PATH ? path.join(STDB_EXE_PATH,'spacetime.exe') : 'spacetime' // or stdb
+// i could use OS specific extension for the binary, but 
+// that doesn't solve the issue of package.json bin.
+// i could have an os specific package.json, but thats a tad annoying...
+// perhaps if i convert to monorepo, that will make more sense.
 
 
 export async function isRunningByAddr (address: string, quiet=true) {
@@ -66,7 +70,8 @@ export async function start(local_addr:string, [skippedOut, skippedErr]=[false, 
     }
     else skippedErr=true
   })
-  await $`sleep 0.5`
+  await Bun.sleep(500);
+  //await $`sleep 0.5`
 
   return () => proc.kill()
 }
@@ -148,19 +153,9 @@ export async function register_identity(server_id:string, owner:string,  quiet=t
       STDB_ID_Token = "${token}"
     `.replaceAll(/\n\s+/g, '\n')
 
-    // This is tough cuz bun supports multiple .env file paths, but doesn't tell you which was read from...
-    // I'll use .env.local for now as i don't think this should be run on a prod server.
-    // I could check if mode is "production" and append to ".env" if true, hmmm...
-    // or i can just check for all options in the priority defined by bun:
-    //   - https://bun.sh/docs/runtime/env#setting-environment-variables
-    //appendFileSync(".env.local", identity, "utf8")
-
-    // nvm i'll go with this for now
-    appendFileSync(
-      process.env['NODE_ENV'] === 'production' ? ".env.production" : ".env.development",
-      identity, 
-      "utf8"
-    )
+    // A servers identities cannot be shared atm, so we shall save
+    // new ones to the specific local machine if not provided already.
+    appendFileSync(".env.local", identity, "utf8")
   }
 
   else {
@@ -314,6 +309,14 @@ export async function register_server_address(server_name:string, address:string
 export async function fingerprint(server_address:string, quiet=true) {
   let proc = await $`${STDB} server fingerprint -s ${server_address} -f`.quiet() 
   if(!quiet) console.log(proc.stderr.toString())
+
+  // Would have to share the server fingerprint (ecdsa_public_key)
+  // in order for imported identities to work on diff machines
+  // (i think)
+
+  //i don't have an env var set up for that atm, so im just gonna 
+  // comment it out for now
+  // oh wait... publish also fails...
 }
 
 
@@ -330,15 +333,18 @@ export async function publish(module_name:string, server_address:string, server_
 
 export async function set_identity(server_id:string, owner: string, quiet=true) {
   console.log("Setting Identity:", owner) // check if it exists already
-  let proc = await $`${STDB} identity set-default ${owner} -s ${server_id}`.quiet()
+  let proc = await $`${STDB} identity set-default ${owner} -s ${server_id}`.quiet().nothrow()
 
   if (proc.exitCode === 0) {
     console.log("Identity Set")
+    // If ID already exists, we don't add to .env.local
+    // we prob should tho...
   } 
   
   else {
     let err = proc.stderr.toString()
     if (err.includes('No such identity')) {
+      // Create new ID and save to .env.local
       await register_identity(server_id, owner)
     } else {
       if(!quiet) console.log(err)
@@ -353,15 +359,26 @@ export async function identity_import(quiet=true) {
   } = process.env
 
   // prob not ideal...
-  let proc = await $`${STDB} identity remove ${STDB_ID_NAME}`.quiet() 
-  if(!quiet) console.log(proc.stderr.toString())
+  let proc = await $`${STDB} identity remove ${STDB_ID_NAME}`.quiet().nothrow()
+  if(!quiet) console.log(proc.stderr.toString()) // name is not guaranteed to exist
+  let proc0 = await $`${STDB} identity remove ${STDB_ID_HEX}`.quiet().nothrow()
+  if(!quiet) console.log(proc0.stderr.toString()) // might have been deleted already or never existed
 
-  let proc1 = await $`${STDB} identity import ${STDB_ID_HEX} ${STDB_ID_Token} -n ${STDB_ID_NAME}`.quiet() 
+  let proc1 = await $`${STDB} identity import "${STDB_ID_HEX}" "${STDB_ID_Token}" --name "${STDB_ID_NAME}"`.quiet()
   if(!quiet) console.log(proc1.stderr.toString())
 
   let proc2 = await $`${STDB} identity set-default ${STDB_ID_NAME}`.quiet() 
   if(!quiet) console.log(proc2.stderr.toString())
 }
+
+/*
+ let proc;
+  try {
+    proc = await $`${STDB} identity remove ${STDB_ID_NAME}`.quiet() 
+  } catch (err) {
+    if(!quiet) console.log(proc ? proc.stderr.toString() : err)
+  }
+*/
 
 export function delete_dir (path:string) {
   if (existsSync(path)) {

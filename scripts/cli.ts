@@ -49,7 +49,8 @@ async function handle_quick_start() {
   let kill_fn: (()=>void) | undefined; // only defined if started here
   if (STDB_SERVER_MODE === 'local') {
     kill_fn = await start_or_use(server_address)
-    await $`sleep 1` // kinda arbitrary...
+    await Bun.sleep(1e3);
+    //await $`sleep 1` // kinda arbitrary...
   }
   process.on('exit', ()=>kill_fn?.());
   return kill_fn!  // should only kill if STDB immediately run here

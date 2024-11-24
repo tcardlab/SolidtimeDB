@@ -1,8 +1,11 @@
 {
   "name": "solidtimedb",
   "type": "module",
+  "bin": {
+    "stdb": "./.spacetime/spacetime.exe"
+  },
   "scripts": {
-    "install": "bun scripts/install.ts",
+    "postinstall": "bun scripts/install.ts",
     "start:FE": "cd client && vite",
     "start:BE": "bun scripts/cli.ts start",
     "start": "bun scripts/start.ts",

@@ -39,67 +39,6 @@ type BuiltinType =
   | { Map: { key: AlgebraicType, value: AlgebraicType } };
 
 
-let schema = {
-  "elements": [
-        {
-          "name": {
-            "some": "sender"
-          },
-          "algebraic_type": {
-            "Product": {
-              "elements": [
-                {
-                  "name": {
-                    "some": "__identity_bytes"
-                  },
-                  "algebraic_type": {
-                    "Builtin": {
-                      "Array": {
-                        "Builtin": {
-                          "U8": []
-                        }
-                      }
-                    }
-                  }
-                }
-              ]
-            }
-          }
-        },
-        {
-          "name": {
-            "some": "sent"
-          },
-          "algebraic_type": {
-            "Builtin": {
-              "U64": []
-            }
-          }
-        },
-        {
-          "name": {
-            "some": "text"
-          },
-          "algebraic_type": {
-            "Builtin": {
-              "String": []
-            }
-          }
-        }
-  ]
-}
-
-let value = [
-  [
-
-      "6d8502416f091c64f913323a179649bd0ead148c4ee2bb5ae3ad41553b3efb28"
-  ],
-  1722461322919561,
-  "hi"
-]
-
-
-
 export function convertValue(schema: Schema, value: any, typeSpace?: AlgebraicType[]): Record<string, any> {
   const result: Record<string, any> = {};
 
@@ -137,12 +76,6 @@ function convertSum(sumType: { variants: SchemaElement[] }, value: Record<string
   } */
 
   const convertedValue = convertElement(variant.algebraic_type, variantValue, variant.name.some, typeSpace);
-
-  /* return {
-    variantIndex,
-    variantName: variant.name.some,
-    value: convertedValue
-  }; */
   return convertedValue
 }
 
@@ -209,7 +142,70 @@ function convertBuiltin(type: BuiltinType, value: any, name?: string): any {
 }
 
 
+
+
+/* DEMO */
+
 if (import.meta.main) {
+  let schema = {
+    "elements": [
+          {
+            "name": {
+              "some": "sender"
+            },
+            "algebraic_type": {
+              "Product": {
+                "elements": [
+                  {
+                    "name": {
+                      "some": "__identity_bytes"
+                    },
+                    "algebraic_type": {
+                      "Builtin": {
+                        "Array": {
+                          "Builtin": {
+                            "U8": []
+                          }
+                        }
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "name": {
+              "some": "sent"
+            },
+            "algebraic_type": {
+              "Builtin": {
+                "U64": []
+              }
+            }
+          },
+          {
+            "name": {
+              "some": "text"
+            },
+            "algebraic_type": {
+              "Builtin": {
+                "String": []
+              }
+            }
+          }
+    ]
+  }
+  
+  let value = [
+    [
+  
+        "6d8502416f091c64f913323a179649bd0ead148c4ee2bb5ae3ad41553b3efb28"
+    ],
+    1722461322919561,
+    "hi"
+  ]
+
   const result = convertValue(schema as any, value);
   console.log(result);
   console.log(result.sender.toHexString());

@@ -10,6 +10,9 @@ import { $ } from 'bun'
 import { mkdir } from 'fs/promises';
 import { createGunzip } from 'zlib';
 import { extract } from 'tar';
+import { pipeline } from 'stream/promises';
+import { createWriteStream, rename } from 'fs';
+
 
 let {
   STDB_SERVER_PATH,
@@ -209,43 +212,53 @@ async function download_asset(url: string, dest: string) {
   const totalSize = Number(response.headers.get('content-length')) || 0;
   let downloadedSize = 0;
 
-  const gunzip = createGunzip();
-  const ext = extract({ cwd: dest });
-
   const body = response.body;
   if (!body) throw new Error('No response body');
 
   let lastLogTime = 0;
 
-  await new Promise((resolve, reject) => {
-    const reader = body.getReader();
-    const pump = async () => {
-      try {
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          downloadedSize += value.length;
-          gunzip.write(value);
-          
-          // Update progress
-          const now = Date.now();
-          if (totalSize > 0 && now - lastLogTime > 100) { // Update every 100ms
-            const percentComplete = Math.round((downloadedSize / totalSize) * 100);
-            process.stdout.write(`\rDownloading... ${percentComplete}% complete`);
-            lastLogTime = now;
-          }
-        }
-        gunzip.end();
-      } catch (error) {
-        reject(error);
-      }
-    };
+  const updateProgress = () => {
+    const now = Date.now();
+    if (totalSize > 0 && now - lastLogTime > 100) { // Update every 100ms
+      const percentComplete = Math.round((downloadedSize / totalSize) * 100);
+      process.stdout.write(`\rDownloading... ${percentComplete}% complete`);
+      lastLogTime = now;
+    }
+  };
 
-    pump();
-    gunzip.pipe(ext);
-    ext.on('finish', resolve);
-    ext.on('error', reject);
-  });
+  if (url.endsWith('.tar.gz')) {
+    const gunzip = createGunzip();
+    const extract_stream = extract({ cwd: dest });
+
+    await pipeline(
+      body,
+      async function* (source) {
+        for await (const chunk of source) {
+          downloadedSize += chunk.length;
+          updateProgress();
+          yield chunk;
+        }
+      },
+      gunzip,
+      extract_stream
+    );
+  } else {
+    const fileName = url.split('/').pop() || 'downloaded_file';
+    const filePath = `${dest}/${fileName}`;
+    const fileStream = createWriteStream(filePath);
+
+    await pipeline(
+      body,
+      async function* (source) {
+        for await (const chunk of source) {
+          downloadedSize += chunk.length;
+          updateProgress();
+          yield chunk;
+        }
+      },
+      fileStream
+    );
+  }
 
   // Clear the progress message and move to a new line
   process.stdout.write('\r\x1b[K');
@@ -288,11 +301,20 @@ export async function downloadRelease(release: Release) {
     console.warn(`Temp env patch:\n\t export PATH="${destinationPath}/spacetime":PATH`)
   }
 
+  // easier to add .exe than to handle per OS or remove from Win... 
   switch (process.platform) {
     case 'darwin':
-      return $`chmod +x ${destinationPath}/spacetime`
+      rename(`${destinationPath}/spacetime`, `${destinationPath}/spacetime.exe`, (err) => {
+        if (err) throw err;
+        console.log('File renamed successfully!');
+      });
+      return $`chmod +x ${destinationPath}/spacetime.exe`
     case 'linux':
-      return $`chmod +x ${destinationPath}/spacetime`
+      rename(`${destinationPath}/spacetime`, `${destinationPath}/spacetime.exe`, (err) => {
+        if (err) throw err;
+        console.log('File renamed successfully!');
+      });
+      return $`chmod +x ${destinationPath}/spacetime.exe`
     case 'win32':
       return
     default:
